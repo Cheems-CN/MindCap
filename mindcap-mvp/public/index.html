@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MindCap 心理干预平台 MVP</title>
+    <link rel="stylesheet" href="/vendor/nlux-nova.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <h1>MindCap</h1>
+        <p class="subtitle">EEG + LLM 样板系统</p>
+        <nav>
+          <button class="nav-btn active" data-view="login">1. 登录/受试者</button>
+          <button class="nav-btn" data-view="dashboard">2. 总览</button>
+          <button class="nav-btn" data-view="session">3. 实时会话</button>
+          <button class="nav-btn" data-view="history">4. 历史回放</button>
+          <button class="nav-btn" data-view="profile">5. 画像与记忆</button>
+          <button class="nav-btn" data-view="strategy">6. 策略与奖励</button>
+          <button class="nav-btn" data-view="safety">7. 安全中心</button>
+          <button class="nav-btn" data-view="evaluation">8. 评估与导出</button>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div>
+            <strong>当前会话：</strong>
+            <span id="current-session-id">未启动</span>
+          </div>
+          <div>
+            <strong>当前受试者：</strong>
+            <span id="current-user-name">未选择</span>
+          </div>
+          <div class="badge" id="global-system-status">系统待初始化</div>
+        </header>
+
+        <section class="view active" id="view-login">
+          <h2>登录 / 受试者选择</h2>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>受试者选择卡</h3>
+              <label for="user-select">选择受试者</label>
+              <select id="user-select"></select>
+              <button id="start-session-btn">开始会话</button>
+            </article>
+            <article class="panel">
+              <h3>设备与伦理面板</h3>
+              <p><strong>EEG设备状态：</strong><span id="device-status">模拟在线</span></p>
+              <p><strong>伦理告知：</strong>仅用于研究样板，不替代医疗建议。</p>
+              <button id="show-ethics-btn">查看伦理告知</button>
+              <div id="ethics-box" class="hidden note">
+                该系统用于科研演示。涉及高风险心理状态时，应转人工并遵循机构流程。
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-dashboard">
+          <h2>总览 Dashboard</h2>
+          <div class="panel-grid metrics">
+            <article class="panel metric">
+              <h3>今日会话数</h3>
+              <p id="metric-sessions">0</p>
+            </article>
+            <article class="panel metric">
+              <h3>今日风险告警</h3>
+              <p id="metric-risk">0</p>
+            </article>
+            <article class="panel metric">
+              <h3>平均情绪改善分</h3>
+              <p id="metric-mood">0.00</p>
+            </article>
+          </div>
+          <article class="panel">
+            <h3>系统状态</h3>
+            <div id="system-status-grid" class="status-grid"></div>
+          </article>
+        </section>
+
+        <section class="view" id="view-session">
+          <h2>实时会话工作台</h2>
+          <div class="panel-grid three-col">
+            <article class="panel">
+              <h3>EEG实时情绪卡</h3>
+              <p>标签：<span id="live-emotion-label">neutral</span></p>
+              <p>置信度：<span id="live-emotion-confidence">0.50</span></p>
+              <p>更新时间：<span id="live-emotion-time">-</span></p>
+              <hr />
+              <label>模拟情绪标签</label>
+              <select id="mock-eeg-label">
+                <option value="calm">calm</option>
+                <option value="neutral">neutral</option>
+                <option value="stress">stress</option>
+                <option value="sad">sad</option>
+                <option value="anxiety">anxiety</option>
+              </select>
+              <label>模拟置信度</label>
+              <input id="mock-eeg-confidence" type="number" min="0" max="1" step="0.01" value="0.73" />
+              <button id="push-eeg-btn">推送EEG结果</button>
+            </article>
+
+            <article class="panel">
+              <h3>心理对话窗口（NLUX）</h3>
+              <div id="chat-ui-root" class="chat-ui-root"></div>
+              <p class="note" id="chat-engine-note">聊天引擎待就绪</p>
+              <div class="row">
+                <button id="feedback-good-btn">本轮有帮助</button>
+                <button id="feedback-bad-btn">本轮无帮助</button>
+              </div>
+            </article>
+
+            <article class="panel">
+              <h3>干预建议与安全</h3>
+              <ul id="suggestion-list"></ul>
+              <div id="intervention-progress" class="note">干预轨道：待建立</div>
+              <div id="live-safety-alert" class="alert">当前无风险告警</div>
+              <h4>会话控制</h4>
+              <div class="row">
+                <button id="refresh-session-btn">刷新状态</button>
+                <button id="end-session-btn">结束会话</button>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel">
+            <h3>情绪趋势（最近10条）</h3>
+            <ol id="emotion-trend-list"></ol>
+          </article>
+        </section>
+
+        <section class="view" id="view-history">
+          <h2>历史会话与回放</h2>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>会话列表筛选</h3>
+              <button id="reload-history-btn">刷新会话列表</button>
+              <div id="session-list"></div>
+            </article>
+            <article class="panel">
+              <h3>会话回放面板</h3>
+              <p id="history-meta">请选择左侧会话</p>
+              <h4>时间轴</h4>
+              <ol id="history-timeline"></ol>
+              <h4>对话回放</h4>
+              <div id="history-chat"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-profile">
+          <h2>用户画像与记忆</h2>
+          <article class="panel">
+            <label for="profile-user-select">查看用户</label>
+            <select id="profile-user-select"></select>
+            <button id="load-profile-btn">加载画像</button>
+          </article>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>基础画像</h3>
+              <pre id="profile-basic"></pre>
+            </article>
+            <article class="panel">
+              <h3>短期记忆摘要</h3>
+              <ol id="profile-short-memory"></ol>
+            </article>
+            <article class="panel">
+              <h3>长期画像与偏好</h3>
+              <pre id="profile-long-memory"></pre>
+            </article>
+            <article class="panel">
+              <h3>已验证有效策略</h3>
+              <ul id="profile-effective"></ul>
+            </article>
+          </div>
+          <article class="panel">
+            <h3>记忆更新时间线</h3>
+            <ol id="profile-timeline"></ol>
+          </article>
+        </section>
+
+        <section class="view" id="view-strategy">
+          <h2>策略与奖励配置</h2>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>当前策略版本</h3>
+              <input id="strategy-version" type="text" />
+              <label>即时情绪奖励权重</label>
+              <input id="reward-immediate" type="number" step="0.1" />
+              <label>长期稳定奖励权重</label>
+              <input id="reward-longterm" type="number" step="0.1" />
+              <label>指南符合度权重</label>
+              <input id="reward-guideline" type="number" step="0.1" />
+              <button id="save-strategy-btn">保存策略配置</button>
+            </article>
+            <article class="panel">
+              <h3>动作空间与训练占位</h3>
+              <pre id="strategy-json"></pre>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-safety">
+          <h2>安全中心</h2>
+          <div class="panel-grid metrics safety-metrics">
+            <article class="panel metric">
+              <h3>累计告警</h3>
+              <p id="safety-total-alerts">0</p>
+            </article>
+            <article class="panel metric">
+              <h3>高风险</h3>
+              <p id="safety-high-alerts">0</p>
+            </article>
+            <article class="panel metric">
+              <h3>中风险</h3>
+              <p id="safety-medium-alerts">0</p>
+            </article>
+            <article class="panel metric">
+              <h3>近24小时</h3>
+              <p id="safety-last24-alerts">0</p>
+            </article>
+          </div>
+
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>风险等级分布</h3>
+              <div id="safety-severity-bars"></div>
+            </article>
+            <article class="panel">
+              <h3>24小时告警趋势</h3>
+              <div id="safety-trend-bars" class="safety-trend-bars"></div>
+              <p class="note">按小时滚动统计最近24小时告警次数</p>
+            </article>
+          </div>
+
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>高频触发原因</h3>
+              <div id="safety-top-reasons"></div>
+            </article>
+            <article class="panel">
+              <h3>规则状态与拦截词</h3>
+              <h4>规则启用状态</h4>
+              <div id="safety-rules"></div>
+              <h4>拦截关键词</h4>
+              <div id="safety-keywords"></div>
+              <button id="reload-safety-btn">刷新安全配置</button>
+            </article>
+          </div>
+
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>告警时间线</h3>
+              <ol id="safety-logs"></ol>
+            </article>
+            <article class="panel">
+              <h3>应急升级流程</h3>
+              <p id="safety-escalation-flow" class="note">未加载</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-evaluation">
+          <h2>实验评估与成果导出</h2>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>模型指标</h3>
+              <pre id="evaluation-model"></pre>
+              <h3>干预指标</h3>
+              <pre id="evaluation-intervention"></pre>
+            </article>
+            <article class="panel">
+              <h3>导出与结题材料</h3>
+              <ul id="evaluation-export-items"></ul>
+              <div class="row">
+                <button class="export-btn" data-kind="paper_figures">导出论文图表</button>
+                <button class="export-btn" data-kind="softcopy_checklist">导出软著清单</button>
+              </div>
+              <div id="export-status" class="note"></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

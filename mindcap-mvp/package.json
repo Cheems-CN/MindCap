@@ -1,0 +1,16 @@
+{
+  "name": "mindcap-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MindCap EEG + LLM web MVP sample",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "@langchain/classic": "^1.0.32",
+    "@langchain/core": "^1.1.44",
+    "@nlux/core": "^2.17.1",
+    "@nlux/themes": "^2.17.1",
+    "langchain": "^1.3.5"
+  }
+}
