@@ -27,11 +27,11 @@
       <main class="content">
         <header class="topbar">
           <div>
-            <strong>当前会话：</strong>
+            <strong>当前会话:</strong>
             <span id="current-session-id">未启动</span>
           </div>
           <div>
-            <strong>当前受试者：</strong>
+            <strong>当前受试者:</strong>
             <span id="current-user-name">未选择</span>
           </div>
           <div class="badge" id="global-system-status">系统待初始化</div>
@@ -48,11 +48,11 @@
             </article>
             <article class="panel">
               <h3>设备与伦理面板</h3>
-              <p><strong>EEG设备状态：</strong><span id="device-status">模拟在线</span></p>
-              <p><strong>伦理告知：</strong>仅用于研究样板，不替代医疗建议。</p>
+              <p><strong>EEG 设备状态:</strong> <span id="device-status">模拟在线</span></p>
+              <p><strong>伦理告知:</strong> 本系统仅用于科研样板，不替代临床医疗建议。</p>
               <button id="show-ethics-btn">查看伦理告知</button>
               <div id="ethics-box" class="hidden note">
-                该系统用于科研演示。涉及高风险心理状态时，应转人工并遵循机构流程。
+                若出现高风险心理状态，系统会触发安全替代回复并建议人工升级处理。
               </div>
             </article>
           </div>
@@ -84,12 +84,12 @@
           <h2>实时会话工作台</h2>
           <div class="panel-grid three-col">
             <article class="panel">
-              <h3>EEG实时情绪卡</h3>
-              <p>标签：<span id="live-emotion-label">neutral</span></p>
-              <p>置信度：<span id="live-emotion-confidence">0.50</span></p>
-              <p>更新时间：<span id="live-emotion-time">-</span></p>
+              <h3>EEG 实时情绪卡</h3>
+              <p>标签: <span id="live-emotion-label">neutral</span></p>
+              <p>置信度: <span id="live-emotion-confidence">0.50</span></p>
+              <p>更新时间: <span id="live-emotion-time">-</span></p>
               <hr />
-              <label>模拟情绪标签</label>
+              <label for="mock-eeg-label">模拟情绪标签</label>
               <select id="mock-eeg-label">
                 <option value="calm">calm</option>
                 <option value="neutral">neutral</option>
@@ -97,9 +97,9 @@
                 <option value="sad">sad</option>
                 <option value="anxiety">anxiety</option>
               </select>
-              <label>模拟置信度</label>
+              <label for="mock-eeg-confidence">模拟置信度</label>
               <input id="mock-eeg-confidence" type="number" min="0" max="1" step="0.01" value="0.73" />
-              <button id="push-eeg-btn">推送EEG结果</button>
+              <button id="push-eeg-btn">推送 EEG 结果</button>
             </article>
 
             <article class="panel">
@@ -114,8 +114,8 @@
 
             <article class="panel">
               <h3>干预建议与安全</h3>
-              <ul id="suggestion-list"></ul>
-              <div id="intervention-progress" class="note">干预轨道：待建立</div>
+              <ul id="suggestion-list" class="list-cards"></ul>
+              <div id="intervention-progress" class="note">干预轨道: 待建立</div>
               <div id="live-safety-alert" class="alert">当前无风险告警</div>
               <h4>会话控制</h4>
               <div class="row">
@@ -141,11 +141,11 @@
             </article>
             <article class="panel">
               <h3>会话回放面板</h3>
-              <p id="history-meta">请选择左侧会话</p>
+              <p id="history-meta" class="note">请选择左侧会话</p>
               <h4>时间轴</h4>
-              <ol id="history-timeline"></ol>
+              <ul id="history-timeline" class="timeline-list"></ul>
               <h4>对话回放</h4>
-              <div id="history-chat"></div>
+              <div id="history-chat" class="history-chat-list"></div>
             </article>
           </div>
         </section>
@@ -157,27 +157,44 @@
             <select id="profile-user-select"></select>
             <button id="load-profile-btn">加载画像</button>
           </article>
+
           <div class="panel-grid two-col">
             <article class="panel">
               <h3>基础画像</h3>
-              <pre id="profile-basic"></pre>
+              <div class="kv-grid">
+                <div><span class="k">ID</span><span id="profile-id" class="v">-</span></div>
+                <div><span class="k">姓名</span><span id="profile-name" class="v">-</span></div>
+                <div><span class="k">年龄</span><span id="profile-age" class="v">-</span></div>
+                <div><span class="k">性别</span><span id="profile-gender" class="v">-</span></div>
+              </div>
+              <h4>标签</h4>
+              <div id="profile-tags" class="chip-list"></div>
             </article>
+
             <article class="panel">
               <h3>短期记忆摘要</h3>
-              <ol id="profile-short-memory"></ol>
+              <ul id="profile-short-memory" class="list-cards"></ul>
             </article>
+
             <article class="panel">
               <h3>长期画像与偏好</h3>
-              <pre id="profile-long-memory"></pre>
+              <h4>触发因素</h4>
+              <ul id="profile-triggers" class="list-cards"></ul>
+              <h4>偏好干预方式</h4>
+              <ul id="profile-preferred" class="list-cards"></ul>
+              <h4>需规避话题</h4>
+              <ul id="profile-avoid-topics" class="list-cards"></ul>
             </article>
+
             <article class="panel">
               <h3>已验证有效策略</h3>
-              <ul id="profile-effective"></ul>
+              <ul id="profile-effective" class="list-cards"></ul>
             </article>
           </div>
+
           <article class="panel">
             <h3>记忆更新时间线</h3>
-            <ol id="profile-timeline"></ol>
+            <ul id="profile-timeline" class="timeline-list"></ul>
           </article>
         </section>
 
@@ -187,23 +204,30 @@
             <article class="panel">
               <h3>当前策略版本</h3>
               <input id="strategy-version" type="text" />
-              <label>即时情绪奖励权重</label>
+              <label for="reward-immediate">即时情绪奖励权重</label>
               <input id="reward-immediate" type="number" step="0.1" />
-              <label>长期稳定奖励权重</label>
+              <label for="reward-longterm">长期稳定奖励权重</label>
               <input id="reward-longterm" type="number" step="0.1" />
-              <label>指南符合度权重</label>
+              <label for="reward-guideline">指南符合度权重</label>
               <input id="reward-guideline" type="number" step="0.1" />
               <button id="save-strategy-btn">保存策略配置</button>
             </article>
+
             <article class="panel">
-              <h3>动作空间与训练占位</h3>
-              <pre id="strategy-json"></pre>
+              <h3>动作空间与训练配置</h3>
+              <h4>动作空间</h4>
+              <ul id="strategy-actions" class="list-cards"></ul>
+              <h4>训练设置</h4>
+              <div id="strategy-training" class="chip-list"></div>
+              <h4>A/B 对照</h4>
+              <div id="strategy-abtest" class="kv-grid"></div>
             </article>
           </div>
         </section>
 
         <section class="view" id="view-safety">
           <h2>安全中心</h2>
+
           <div class="panel-grid metrics safety-metrics">
             <article class="panel metric">
               <h3>累计告警</h3>
@@ -253,11 +277,11 @@
           <div class="panel-grid two-col">
             <article class="panel">
               <h3>告警时间线</h3>
-              <ol id="safety-logs"></ol>
+              <ul id="safety-logs" class="timeline-list"></ul>
             </article>
             <article class="panel">
               <h3>应急升级流程</h3>
-              <p id="safety-escalation-flow" class="note">未加载</p>
+              <ol id="safety-escalation-flow" class="flow-steps"></ol>
             </article>
           </div>
         </section>
@@ -267,13 +291,23 @@
           <div class="panel-grid two-col">
             <article class="panel">
               <h3>模型指标</h3>
-              <pre id="evaluation-model"></pre>
-              <h3>干预指标</h3>
-              <pre id="evaluation-intervention"></pre>
+              <div class="kv-grid">
+                <div><span class="k">情绪识别准确率</span><span id="eval-emotion-acc" class="v">-</span></div>
+                <div><span class="k">F1 Macro</span><span id="eval-f1" class="v">-</span></div>
+                <div><span class="k">跨设备分数</span><span id="eval-cross-device" class="v">-</span></div>
+              </div>
+
+              <h3>干预效果</h3>
+              <div class="kv-grid">
+                <div><span class="k">总对话轮次</span><span id="eval-turns" class="v">-</span></div>
+                <div><span class="k">反馈次数</span><span id="eval-feedback" class="v">-</span></div>
+                <div><span class="k">有帮助比例</span><span id="eval-helpful-rate" class="v">-</span></div>
+              </div>
             </article>
+
             <article class="panel">
               <h3>导出与结题材料</h3>
-              <ul id="evaluation-export-items"></ul>
+              <ul id="evaluation-export-items" class="list-cards"></ul>
               <div class="row">
                 <button class="export-btn" data-kind="paper_figures">导出论文图表</button>
                 <button class="export-btn" data-kind="softcopy_checklist">导出软著清单</button>

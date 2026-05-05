@@ -612,7 +612,13 @@ function buildMockAssistantReply({ message, emotion, session, user, memoryContex
     emotion?.label === "anxiety" || emotion?.label === "stress"
       ? "我听到你现在有些紧绷，我们先把状态稳下来。"
       : "谢谢你愿意说出来，我们一起慢慢梳理。";
-  const suggestions = buildMemoryAwareSuggestions({ session, user, emotion, memoryContext });
+  const suggestions = buildMemoryAwareSuggestions({
+    session,
+    user,
+    emotion,
+    memoryContext,
+    currentMessage: message
+  });
   return {
     safetyLevel: "normal",
     text: `${tone} 你刚才说的是：“${clipText(message, 60)}”。我建议先做一个最小动作，然后我再陪你看下一步。`,
@@ -777,7 +783,13 @@ async function buildAssistantReply({ message, emotion, session, user }) {
     return {
       safetyLevel: "normal",
       text: content,
-      suggestions: buildMemoryAwareSuggestions({ session, user, emotion, memoryContext }),
+      suggestions: buildMemoryAwareSuggestions({
+        session,
+        user,
+        emotion,
+        memoryContext,
+        currentMessage: message
+      }),
       llmSource: "deepseek",
       memoryContext,
       runtime
