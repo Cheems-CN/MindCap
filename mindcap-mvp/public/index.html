@@ -125,10 +125,39 @@
             </article>
           </div>
 
-          <article class="panel">
-            <h3>情绪趋势（最近10条）</h3>
-            <ol id="emotion-trend-list"></ol>
-          </article>
+          <div class="panel-grid two-col" style="margin-top: 14px;">
+            <article class="panel" id="eeg-import-panel">
+              <h3>EEG 文件导入</h3>
+              <div id="eeg-drop-zone" class="eeg-drop-zone">
+                <div class="drop-zone-content">
+                  <span class="drop-icon">📁</span>
+                  <p>拖拽 CSV 文件到此处</p>
+                  <p class="drop-hint">或点击选择文件</p>
+                  <input type="file" id="eeg-file-input" accept=".csv,.tsv,.txt" hidden />
+                </div>
+              </div>
+              <div id="eeg-preview" class="eeg-preview hidden">
+                <div class="preview-header">
+                  <strong id="preview-filename">-</strong>
+                  <button id="clear-preview-btn" class="btn-sm">清除</button>
+                </div>
+                <div class="preview-stats">
+                  <span>格式: <strong id="preview-format">-</strong></span>
+                  <span>通道: <strong id="preview-channels">-</strong></span>
+                  <span>行数: <strong id="preview-rows">-</strong></span>
+                </div>
+                <div class="preview-channels" id="preview-channel-list"></div>
+                <button id="import-eeg-btn">导入并分析情绪</button>
+              </div>
+              <div id="eeg-import-result" class="eeg-import-result hidden"></div>
+              <div id="eeg-import-error" class="eeg-import-error hidden"></div>
+            </article>
+
+            <article class="panel">
+              <h3>情绪趋势（最近10条）</h3>
+              <ol id="emotion-trend-list"></ol>
+            </article>
+          </div>
         </section>
 
         <section class="view" id="view-history">

@@ -56,6 +56,34 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS eeg_imports (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES sessions(id),
+    filename TEXT NOT NULL,
+    channel_count INTEGER DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    duration_sec REAL DEFAULT 0,
+    sample_rate REAL,
+    device TEXT,
+    format_type TEXT DEFAULT 'raw',
+    detected_emotion_label TEXT,
+    detected_emotion_confidence REAL,
+    time TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS eeg_channels (
+    id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES eeg_imports(id),
+    channel_name TEXT NOT NULL,
+    band TEXT,
+    value REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_eeg_imports_session ON eeg_imports(session_id);
+  CREATE INDEX IF NOT EXISTS idx_eeg_channels_import ON eeg_channels(import_id);
+
   CREATE TABLE IF NOT EXISTS chat_turns (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -615,6 +643,60 @@ function getEvaluation() {
   };
 }
 
+// ── EEG Import queries ─────────────────────────────────────────────
+
+function createEEGImport(imp) {
+  db.prepare(`
+    INSERT INTO eeg_imports (id, session_id, filename, channel_count, sample_count,
+      duration_sec, sample_rate, device, format_type, detected_emotion_label,
+      detected_emotion_confidence, time)
+    VALUES (@id, @sessionId, @filename, @channelCount, @sampleCount,
+      @durationSec, @sampleRate, @device, @formatType, @detectedEmotionLabel,
+      @detectedEmotionConfidence, @time)
+  `).run({
+    id: imp.id,
+    sessionId: imp.sessionId || null,
+    filename: imp.filename,
+    channelCount: imp.channelCount || 0,
+    sampleCount: imp.sampleCount || 0,
+    durationSec: imp.durationSec || 0,
+    sampleRate: imp.sampleRate || null,
+    device: imp.device || null,
+    formatType: imp.formatType || "raw",
+    detectedEmotionLabel: imp.detectedEmotionLabel || null,
+    detectedEmotionConfidence: imp.detectedEmotionConfidence || null,
+    time: imp.time
+  });
+}
+
+function insertEEGChannel(ch) {
+  db.prepare(`
+    INSERT INTO eeg_channels (id, import_id, channel_name, band, value)
+    VALUES (@id, @importId, @channelName, @band, @value)
+  `).run({
+    id: ch.id,
+    importId: ch.importId,
+    channelName: ch.channelName,
+    band: ch.band || null,
+    value: ch.value
+  });
+}
+
+function getEEGImports(sessionId) {
+  return db.prepare("SELECT * FROM eeg_imports WHERE session_id = ? ORDER BY time DESC").all(sessionId);
+}
+
+function getEEGImportChannels(importId) {
+  return db.prepare("SELECT * FROM eeg_channels WHERE import_id = ? ORDER BY channel_name, band").all(importId);
+}
+
+function getEEGImportFull(importId) {
+  const imp = db.prepare("SELECT * FROM eeg_imports WHERE id = ?").get(importId);
+  if (!imp) return null;
+  const channels = db.prepare("SELECT * FROM eeg_channels WHERE import_id = ? ORDER BY channel_name, band").all(importId);
+  return { ...imp, channels };
+}
+
 // ── Export ──────────────────────────────────────────────────────────
 
 function insertExport(record) {
@@ -648,5 +730,10 @@ module.exports = {
   updateStrategyConfig,
   getDashboard,
   getEvaluation,
-  insertExport
+  insertExport,
+  createEEGImport,
+  insertEEGChannel,
+  getEEGImports,
+  getEEGImportChannels,
+  getEEGImportFull
 };

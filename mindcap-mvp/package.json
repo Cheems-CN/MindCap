@@ -12,6 +12,7 @@
     "@nlux/core": "^2.17.1",
     "@nlux/themes": "^2.17.1",
     "better-sqlite3": "^12.9.0",
+    "csv-parse": "^6.2.1",
     "langchain": "^1.3.5"
   }
 }

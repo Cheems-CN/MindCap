@@ -6,6 +6,7 @@ const { BufferWindowMemory, VectorStoreRetrieverMemory, CombinedMemory } = requi
 const { MemoryVectorStore } = require("@langchain/classic/vectorstores/memory");
 const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
+const { parseEEGFile } = require("./eeg-parser");
 
 const HOST = "127.0.0.1";
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5050;
@@ -820,6 +821,87 @@ async function handleApi(req, res, urlObj) {
     };
     db.insertExport(record);
     sendJson(res, 200, { ok: true, export: record });
+    return true;
+  }
+
+  // POST /api/eeg/import
+  if (req.method === "POST" && pathname === "/api/eeg/import") {
+    const body = await parseBody(req).catch((err) => ({ __error: err.message }));
+    if (body.__error) { sendJson(res, 400, { error: body.__error }); return true; }
+
+    if (!body.csvData || typeof body.csvData !== "string") {
+      sendJson(res, 400, { error: "Missing csvData field" });
+      return true;
+    }
+    if (!body.filename) {
+      sendJson(res, 400, { error: "Missing filename field" });
+      return true;
+    }
+
+    const session = body.sessionId ? db.getSession(body.sessionId) : null;
+    if (body.sessionId && !session) {
+      sendJson(res, 404, { error: "Session not found" });
+      return true;
+    }
+
+    const parseResult = parseEEGFile(body.csvData, body.filename, body.sessionId || null);
+    const importId = db.createId("eegimp");
+    const now = new Date().toISOString();
+
+    const impRecord = { ...parseResult.imp, id: importId, sessionId: body.sessionId || null, time: now };
+    db.createEEGImport(impRecord);
+
+    // Insert channel records
+    const channelRecords = [];
+    for (const ch of parseResult.channels) {
+      const chId = db.createId("eegch");
+      db.insertEEGChannel({ id: chId, importId, channelName: ch.channelName, band: ch.band || null, value: ch.value });
+      channelRecords.push({ id: chId, channelName: ch.channelName, band: ch.band, value: ch.value });
+    }
+
+    // If session is active, also push as an EEG event
+    if (session && session.status === "active") {
+      const eegEventId = db.createId("eeg");
+      db.insertEEGEvent(eegEventId, body.sessionId, parseResult.emotion.label, parseResult.emotion.confidence, now);
+      db.updateSessionEmotion(body.sessionId, parseResult.emotion.label, parseResult.emotion.confidence, now);
+      db.appendSessionTimeline(body.sessionId, {
+        id: db.createId("evt"),
+        time: now,
+        type: "eeg_import",
+        detail: `导入 ${body.filename} (${parseResult.imp.channelCount}通道, 判定: ${parseResult.emotion.label})`
+      });
+      publishSessionEvent(body.sessionId, "eeg", {
+        id: eegEventId, label: parseResult.emotion.label, confidence: parseResult.emotion.confidence, time: now, source: "import"
+      });
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      importId,
+      format: parseResult.imp.formatType,
+      channelCount: parseResult.imp.channelCount,
+      channelPreview: channelRecords.slice(0, 20),
+      emotion: parseResult.emotion,
+      eegPushed: !!(session && session.status === "active")
+    });
+    return true;
+  }
+
+  // GET /api/eeg/imports
+  if (req.method === "GET" && pathname === "/api/eeg/imports") {
+    const sessionId = urlObj.searchParams.get("sessionId");
+    if (!sessionId) { sendJson(res, 400, { error: "Missing sessionId query param" }); return true; }
+    sendJson(res, 200, { imports: db.getEEGImports(sessionId) });
+    return true;
+  }
+
+  // GET /api/eeg/import/:id
+  if (req.method === "GET" && pathname.startsWith("/api/eeg/import/")) {
+    const importId = pathname.split("/")[4];
+    if (!importId) { sendJson(res, 400, { error: "Missing import ID" }); return true; }
+    const full = db.getEEGImportFull(importId);
+    if (!full) { sendJson(res, 404, { error: "Import not found" }); return true; }
+    sendJson(res, 200, { import: full });
     return true;
   }
 

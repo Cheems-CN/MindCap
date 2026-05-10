@@ -826,6 +826,227 @@ async function createExport(kind) {
   setText("export-status", `导出任务已创建: ${result.export.id} (${result.export.status})`);
 }
 
+// ── EEG File Import ─────────────────────────────────────────────────
+
+let pendingCsvData = null;
+let pendingFilename = null;
+
+function setupEEGImport() {
+  const dropZone = byId("eeg-drop-zone");
+  const fileInput = byId("eeg-file-input");
+  const preview = byId("eeg-preview");
+  const resultBox = byId("eeg-import-result");
+  const errorBox = byId("eeg-import-error");
+
+  if (!dropZone || !fileInput) return;
+
+  dropZone.addEventListener("click", () => fileInput.click());
+
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("drag-over");
+  });
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) readFile(file);
+  });
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (file) readFile(file);
+  });
+
+  byId("clear-preview-btn").addEventListener("click", () => {
+    clearPreview();
+  });
+
+  byId("import-eeg-btn").addEventListener("click", () => {
+    doImport().catch((err) => showImportError(err.message));
+  });
+}
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    pendingCsvData = e.target.result;
+    pendingFilename = file.name;
+    showPreview(file.name, e.target.result);
+  };
+  reader.onerror = () => {
+    showImportError("文件读取失败");
+  };
+  reader.readAsText(file);
+}
+
+function showPreview(filename, csvText) {
+  const preview = byId("eeg-preview");
+  const resultBox = byId("eeg-import-result");
+  const errorBox = byId("eeg-import-error");
+
+  preview.classList.remove("hidden");
+  if (resultBox) resultBox.classList.add("hidden");
+  if (errorBox) errorBox.classList.add("hidden");
+
+  setText("preview-filename", filename);
+
+  const lines = csvText.trim().split("\n").filter(Boolean);
+  if (lines.length < 2) {
+    showImportError("CSV 文件至少需要标题行+1行数据");
+    return;
+  }
+
+  const headers = lines[0].split(/[,\t;]/).map((h) => h.trim());
+  const format = detectFormatLocal(headers);
+  setText("preview-format", format === "bands" ? "频段格式" : format === "raw" ? "原始信号" : "未知");
+  setText("preview-channels", format === "bands" ? String(lines.length - 1) : String(headers.length));
+  setText("preview-rows", format === "raw" ? String(lines.length - 1) : "-");
+
+  const channelList = byId("preview-channel-list");
+  channelList.innerHTML = "";
+
+  if (format === "bands") {
+    for (let i = 1; i < Math.min(lines.length, 7); i++) {
+      const cols = lines[i].split(/[,\t;]/);
+      const row = document.createElement("div");
+      row.className = "preview-channel-row";
+      row.innerHTML = `<span>${cols[0] || "-"}</span><span>${cols.slice(1).map((c) => parseFloat(c).toFixed(2)).join(", ")}</span>`;
+      channelList.appendChild(row);
+    }
+    if (lines.length > 7) {
+      const more = document.createElement("div");
+      more.className = "preview-channel-row";
+      more.textContent = `... 还有 ${lines.length - 7} 个通道`;
+      channelList.appendChild(more);
+    }
+  } else if (format === "raw") {
+    const firstDataLine = lines[1].split(/[,\t;]/);
+    for (let i = 0; i < Math.min(headers.length, 6); i++) {
+      const row = document.createElement("div");
+      row.className = "preview-channel-row";
+      row.innerHTML = `<span>${headers[i]}</span><span>${firstDataLine[i] ? parseFloat(firstDataLine[i]).toFixed(2) : "-"}</span>`;
+      channelList.appendChild(row);
+    }
+    if (headers.length > 6) {
+      const more = document.createElement("div");
+      more.className = "preview-channel-row";
+      more.textContent = `... 还有 ${headers.length - 6} 个通道`;
+      channelList.appendChild(more);
+    }
+  }
+}
+
+function detectFormatLocal(headers) {
+  const lowerHeaders = headers.map((h) => String(h || "").toLowerCase().trim());
+  if (lowerHeaders[0] === "channel" || lowerHeaders[0] === "electrode" || lowerHeaders[0] === "通道" || lowerHeaders[0] === "电极") {
+    const bandKeywords = ["delta", "theta", "alpha", "beta", "gamma"];
+    if (lowerHeaders.slice(1).some((c) => bandKeywords.includes(c))) return "bands";
+  }
+  const channelLike = lowerHeaders.filter((h) => /^[a-z]{1,3}\d{1,2}$/i.test(h));
+  if (channelLike.length >= 2) return "raw";
+  return "unknown";
+}
+
+async function doImport() {
+  if (!pendingCsvData || !pendingFilename) {
+    showImportError("请先选择 CSV 文件");
+    return;
+  }
+
+  const importBtn = byId("import-eeg-btn");
+  importBtn.disabled = true;
+  importBtn.textContent = "导入中...";
+
+  try {
+    const result = await api("/api/eeg/import", {
+      method: "POST",
+      body: JSON.stringify({
+        csvData: pendingCsvData,
+        filename: pendingFilename,
+        sessionId: state.currentSessionId || null
+      })
+    });
+
+    showImportResult(result);
+    importBtn.textContent = "导入完成 ✓";
+
+    if (result.eegPushed && result.emotion) {
+      updateLiveEmotion({
+        label: result.emotion.label,
+        confidence: result.emotion.confidence,
+        time: new Date().toISOString()
+      });
+      setSystemBadge(`EEG导入: ${result.emotion.label} (${result.emotion.confidence.toFixed(2)})`);
+    }
+
+    if (state.currentSessionId) {
+      refreshCurrentSessionState().catch(() => {});
+    }
+
+    setTimeout(() => {
+      importBtn.disabled = false;
+      importBtn.textContent = "导入并分析情绪";
+    }, 2000);
+  } catch (err) {
+    importBtn.disabled = false;
+    importBtn.textContent = "导入并分析情绪";
+    throw err;
+  }
+}
+
+function showImportResult(result) {
+  const box = byId("eeg-import-result");
+  const errorBox = byId("eeg-import-error");
+  if (!box) return;
+
+  box.classList.remove("hidden");
+  if (errorBox) errorBox.classList.add("hidden");
+
+  const e = result.emotion || {};
+  const labelColors = {
+    calm: "#15803d", neutral: "#5f6f81", stress: "#dc2626",
+    sad: "#6366f1", anxiety: "#f59e0b"
+  };
+
+  box.innerHTML = `
+    <div style="margin-bottom:6px">
+      <span class="emotion-badge" style="background:${labelColors[e.label] || "#5f6f81"}; color:#fff">${e.label || "?"}</span>
+      <span>置信度: ${(e.confidence || 0).toFixed(2)}</span>
+    </div>
+    <div style="font-size:13px; color:#5f6f81">判定依据: ${e.reasons || "-"}</div>
+    <div style="font-size:13px; color:#5f6f81; margin-top:4px">
+      导入 ${result.channelCount} 通道 | ${result.format} 格式 | ${result.eegPushed ? "已同步到当前会话" : "独立导入"}
+    </div>
+  `;
+}
+
+function showImportError(msg) {
+  const box = byId("eeg-import-error");
+  const resultBox = byId("eeg-import-result");
+  if (!box) return;
+
+  box.classList.remove("hidden");
+  box.textContent = msg;
+  if (resultBox) resultBox.classList.add("hidden");
+}
+
+function clearPreview() {
+  pendingCsvData = null;
+  pendingFilename = null;
+  const preview = byId("eeg-preview");
+  if (preview) preview.classList.add("hidden");
+  const resultBox = byId("eeg-import-result");
+  if (resultBox) resultBox.classList.add("hidden");
+  const errorBox = byId("eeg-import-error");
+  if (errorBox) errorBox.classList.add("hidden");
+  const fileInput = byId("eeg-file-input");
+  if (fileInput) fileInput.value = "";
+}
+
 function bindActions() {
   byId("show-ethics-btn").addEventListener("click", () => {
     byId("ethics-box").classList.toggle("hidden");
@@ -881,6 +1102,7 @@ function bindActions() {
 async function init() {
   setupNavigation();
   bindActions();
+  setupEEGImport();
 
   await loadUsers();
   await mountChat([]);
