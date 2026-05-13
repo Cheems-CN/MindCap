@@ -7,6 +7,7 @@ const { MemoryVectorStore } = require("@langchain/classic/vectorstores/memory");
 const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
 const { parseEEGFile } = require("./eeg-parser");
+const { createPopulatedVectorStore, persistContext } = require("./memory-store");
 
 const HOST = "127.0.0.1";
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5050;
@@ -76,9 +77,12 @@ function buildProfileSeedRecords(user) {
   return records;
 }
 
-function createLangChainMemoryRuntime(user) {
+async function createLangChainMemoryRuntime(user) {
   const embeddings = new DeterministicEmbeddings();
-  const vectorStore = new MemoryVectorStore(embeddings);
+
+  // Create vector store populated from SQLite (survives restart)
+  const vectorStore = await createPopulatedVectorStore(user.id, embeddings);
+
   const longMemory = new VectorStoreRetrieverMemory({
     vectorStoreRetriever: vectorStore.asRetriever(4),
     memoryKey: "long_term_memory",
@@ -98,14 +102,14 @@ function createLangChainMemoryRuntime(user) {
     inputKey: "input",
     outputKey: "output"
   });
-  return { vectorStore, longMemory, shortMemory, combinedMemory, seeded: false };
+  return { vectorStore, longMemory, shortMemory, combinedMemory, seeded: false, embeddings };
 }
 
 async function ensureLangChainMemoryRuntime(user) {
   if (!user) return null;
   let runtime = langchainMemoryRegistry.get(user.id);
   if (!runtime) {
-    runtime = createLangChainMemoryRuntime(user);
+    runtime = await createLangChainMemoryRuntime(user);
     langchainMemoryRegistry.set(user.id, runtime);
   }
   if (!runtime.seeded) {
@@ -129,7 +133,13 @@ async function loadLangChainMemoryContext(runtime, message) {
 
 async function persistLangChainMemory(runtime, userText, assistantText) {
   if (!runtime) return;
+
+  // Save to in-memory LangChain store
   await runtime.combinedMemory.saveContext({ input: userText }, { output: assistantText });
+
+  // Also persist to SQLite so it survives restart
+  const userId = runtime.longMemory?.metadata?.userId || null;
+  await persistContext(userId, userText, assistantText, runtime.embeddings);
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────────

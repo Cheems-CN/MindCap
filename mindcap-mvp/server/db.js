@@ -84,6 +84,17 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_eeg_imports_session ON eeg_imports(session_id);
   CREATE INDEX IF NOT EXISTS idx_eeg_channels_import ON eeg_channels(import_id);
 
+  CREATE TABLE IF NOT EXISTS memory_vectors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    input_text TEXT NOT NULL,
+    output_text TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_memory_vectors_user ON memory_vectors(user_id);
+
   CREATE TABLE IF NOT EXISTS chat_turns (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -697,6 +708,33 @@ function getEEGImportFull(importId) {
   return { ...imp, channels };
 }
 
+// ── Memory vectors ─────────────────────────────────────────────────
+
+function saveMemoryVector(userId, inputText, outputText, embedding) {
+  db.prepare(`
+    INSERT INTO memory_vectors (user_id, input_text, output_text, embedding)
+    VALUES (?, ?, ?, ?)
+  `).run(userId, inputText, outputText, JSON.stringify(embedding));
+}
+
+function loadMemoryVectors(userId) {
+  const rows = db.prepare(`
+    SELECT id, user_id, input_text, output_text, embedding
+    FROM memory_vectors WHERE user_id = ? ORDER BY id
+  `).all(userId);
+  return rows.map(r => ({
+    id: r.id,
+    userId: r.user_id,
+    inputText: r.input_text,
+    outputText: r.output_text,
+    embedding: JSON.parse(r.embedding)
+  }));
+}
+
+function clearMemoryVectors(userId) {
+  db.prepare("DELETE FROM memory_vectors WHERE user_id = ?").run(userId);
+}
+
 // ── Export ──────────────────────────────────────────────────────────
 
 function insertExport(record) {
@@ -735,5 +773,8 @@ module.exports = {
   insertEEGChannel,
   getEEGImports,
   getEEGImportChannels,
-  getEEGImportFull
+  getEEGImportFull,
+  saveMemoryVector,
+  loadMemoryVectors,
+  clearMemoryVectors
 };
