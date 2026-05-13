@@ -178,9 +178,23 @@ function serveStatic(req, res, pathname) {
   const resolved = path.resolve(PUBLIC_DIR, `.${cleanPath}`);
   if (!resolved.startsWith(PUBLIC_DIR)) { sendJson(res, 403, { error: "Forbidden" }); return; }
   fs.readFile(resolved, (err, content) => {
-    if (err) { sendJson(res, 404, { error: "Not found" }); return; }
-    res.writeHead(200, { "Content-Type": getMimeType(resolved) });
-    res.end(content);
+    if (!err) {
+      res.writeHead(200, { "Content-Type": getMimeType(resolved) });
+      res.end(content);
+      return;
+    }
+    // If not found and no extension, try .html
+    if (err.code === "ENOENT" && !path.extname(cleanPath)) {
+      const htmlPath = resolved + ".html";
+      if (!htmlPath.startsWith(PUBLIC_DIR)) { sendJson(res, 403, { error: "Forbidden" }); return; }
+      fs.readFile(htmlPath, (err2, content2) => {
+        if (err2) { sendJson(res, 404, { error: "Not found" }); return; }
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(content2);
+      });
+      return;
+    }
+    sendJson(res, 404, { error: "Not found" });
   });
 }
 
@@ -912,6 +926,68 @@ async function handleApi(req, res, urlObj) {
     const full = db.getEEGImportFull(importId);
     if (!full) { sendJson(res, 404, { error: "Import not found" }); return true; }
     sendJson(res, 200, { import: full });
+    return true;
+  }
+
+  // GET /api/report/:id
+  if (req.method === "GET" && pathname.startsWith("/api/report/")) {
+    const sessionId = pathname.split("/")[3];
+    if (!sessionId) { sendJson(res, 400, { error: "Missing session ID" }); return true; }
+
+    const session = db.getSession(sessionId);
+    if (!session) { sendJson(res, 404, { error: "Session not found" }); return true; }
+
+    const user = db.getUser(session.userId);
+
+    const turns = session.chatTurns.length;
+    const feedbackList = session.feedback || [];
+    const feedbackCount = feedbackList.length;
+    const helpfulCount = feedbackList.filter(f => f.helpful).length;
+    const helpfulRate = feedbackCount > 0 ? helpfulCount / feedbackCount : 0;
+    const moodDeltas = feedbackList.map(f => f.moodDelta).filter(n => !Number.isNaN(n));
+    const avgMoodDelta = moodDeltas.length > 0
+      ? moodDeltas.reduce((a, b) => a + b, 0) / moodDeltas.length : 0;
+
+    const emotionTimeline = (session.emotionTrend || []).map(e => ({
+      time: e.time, label: e.label, confidence: e.confidence
+    }));
+
+    const chatTurns = session.chatTurns.map(t => ({
+      time: t.time,
+      userText: t.userText ? t.userText.substring(0, 120) : "",
+      assistantText: t.assistantText ? t.assistantText.substring(0, 200) : "",
+      safetyLevel: t.safetyLevel || "normal",
+      llmSource: t.llmSource || "unknown",
+      suggestions: (t.suggestions || []).slice(0, 2)
+    }));
+
+    const imports = db.getEEGImports(sessionId);
+    let eegChannels = null;
+    if (imports.length > 0) {
+      const lastImport = imports[0];
+      const channels = db.getEEGImportChannels(lastImport.id);
+      const channelMap = {};
+      for (const ch of channels) {
+        if (!channelMap[ch.channel_name]) {
+          channelMap[ch.channel_name] = { channelName: ch.channel_name };
+        }
+        if (ch.band) channelMap[ch.channel_name][ch.band] = ch.value;
+      }
+      eegChannels = {
+        importId: lastImport.id,
+        filename: lastImport.filename,
+        formatType: lastImport.format_type,
+        channels: Object.values(channelMap)
+      };
+    }
+
+    sendJson(res, 200, {
+      session: { id: session.id, startedAt: session.startedAt, endedAt: session.endedAt, status: session.status, userName: user ? user.name : "未知用户", userId: session.userId },
+      stats: { turns, feedbackCount, helpfulRate: Number(helpfulRate.toFixed(2)), avgMoodDelta: Number(avgMoodDelta.toFixed(2)) },
+      emotionTimeline,
+      chatTurns,
+      eegChannels
+    });
     return true;
   }
 

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MindCap 会话评估报告</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg: #f4f6f9; --card: #fff; --ink: #1c2733; --muted: #5f6f81; --accent: #0d9488; --line: #dde5ef; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: "PingFang SC","Microsoft YaHei",sans-serif; padding: 20px; }
+  .report { max-width: 1100px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  .header h1 { font-size: 24px; }
+  .header .meta { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .print-btn { padding: 8px 18px; border: 1px solid var(--accent); border-radius: 8px; background: #fff; color: var(--accent); cursor: pointer; font-size: 14px; white-space: nowrap; }
+  .print-btn:hover { background: var(--accent); color: #fff; }
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .stat-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; text-align: center; }
+  .stat-card .num { font-size: 32px; font-weight: 700; color: var(--accent); }
+  .stat-card .label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .section h2 { font-size: 18px; margin-bottom: 12px; }
+  .chart-wrap { height: 300px; position: relative; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .timeline-item { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .timeline-item .time { color: var(--muted); min-width: 48px; }
+  .timeline-item .role { font-weight: 600; min-width: 40px; }
+  .timeline-item .role.user { color: #1e3a8a; }
+  .timeline-item .role.assistant { color: #166534; }
+  .timeline-item .text { flex: 1; line-height: 1.5; }
+  .heatmap-header { display: grid; grid-template-columns: 80px repeat(5, 1fr); gap: 4px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .heatmap-header span { text-align: center; }
+  .heatmap-row { display: grid; grid-template-columns: 80px repeat(5, 1fr); gap: 4px; margin-bottom: 2px; }
+  .heatmap-row .ch-label { font-size: 13px; font-weight: 600; color: var(--ink); align-self: center; }
+  .heatmap-cell { border-radius: 6px; padding: 8px 4px; text-align: center; font-size: 11px; color: #fff; min-height: 36px; display: flex; align-items: center; justify-content: center; }
+  .empty-state { text-align: center; padding: 40px; color: var(--muted); }
+  .safety-high { color: #dc2626; font-weight: 600; }
+  .loading { text-align: center; padding: 60px; color: var(--muted); font-size: 16px; }
+  .error { text-align: center; padding: 60px; color: #dc2626; }
+  .error code { background: #fee2e2; padding: 2px 6px; border-radius: 4px; }
+
+  @media print {
+    body { background: #fff; padding: 0; }
+    .print-btn { display: none; }
+    .section { break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
+  }
+
+  @media (max-width: 768px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .two-col { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="report" id="report-root">
+  <div class="loading">正在加载报告数据...</div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const sessionId = params.get("sessionId");
+
+if (!sessionId) {
+  document.getElementById("report-root").innerHTML =
+    '<div class="error"><h2>缺少参数</h2><p>请通过 <code>?sessionId=xxx</code> 指定会话 ID</p></div>';
+} else {
+  loadReport(sessionId);
+}
+
+async function loadReport(sessionId) {
+  try {
+    const resp = await fetch("/api/report/" + sessionId);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || "Request failed: " + resp.status);
+    }
+    const data = await resp.json();
+    render(data);
+  } catch (err) {
+    document.getElementById("report-root").innerHTML =
+      '<div class="error"><h2>加载失败</h2><p>' + err.message + '</p></div>';
+  }
+}
+
+function formatTime(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString("zh-CN") + " " +
+    d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function emotionToValue(label) {
+  return { calm: 2, neutral: 1, stress: 0, sad: -1, anxiety: -2 }[label] || 1;
+}
+
+function emotionColor(label) {
+  return { calm: "#15803d", neutral: "#5f6f81", stress: "#dc2626", sad: "#6366f1", anxiety: "#f59e0b" }[label] || "#5f6f81";
+}
+
+function render(data) {
+  const d = data;
+  const root = document.getElementById("report-root");
+
+  root.innerHTML =
+    '<div class="header">' +
+      '<div>' +
+        '<h1>MindCap 会话评估报告</h1>' +
+        '<div class="meta">' +
+          '受试者: ' + d.session.userName + ' (' + d.session.userId + ') | ' +
+          '会话: ' + (d.session.id || "").substring(0, 16) + '... | ' +
+          formatDate(d.session.startedAt) + ' | ' +
+          '状态: ' + d.session.status +
+        '</div>' +
+      '</div>' +
+      '<button class="print-btn" onclick="window.print()">打印报告</button>' +
+    '</div>' +
+
+    '<div class="stats-grid">' +
+      '<div class="stat-card"><div class="num">' + d.stats.turns + '</div><div class="label">对话轮次</div></div>' +
+      '<div class="stat-card"><div class="num">' + d.stats.feedbackCount + '</div><div class="label">反馈次数</div></div>' +
+      '<div class="stat-card"><div class="num">' + (d.stats.helpfulRate * 100).toFixed(0) + '%</div><div class="label">有帮助率</div></div>' +
+      '<div class="stat-card"><div class="num">' + (d.stats.avgMoodDelta >= 0 ? "+" : "") + d.stats.avgMoodDelta.toFixed(2) + '</div><div class="label">平均情绪改善</div></div>' +
+    '</div>' +
+
+    '<div class="section">' +
+      '<h2>情绪趋势</h2>' +
+      '<div class="chart-wrap"><canvas id="emotion-chart"></canvas></div>' +
+    '</div>' +
+
+    '<div class="two-col">' +
+      '<div class="section">' +
+        '<h2>对话时间线</h2>' +
+        '<div id="timeline-container"></div>' +
+      '</div>' +
+      '<div class="section">' +
+        '<h2>EEG 频谱分析</h2>' +
+        '<div id="heatmap-container"></div>' +
+      '</div>' +
+    '</div>';
+
+  renderEmotionChart(d.emotionTimeline);
+  renderTimeline(d.chatTurns);
+  renderHeatmap(d.eegChannels);
+}
+
+function renderEmotionChart(timeline) {
+  var ctx = document.getElementById("emotion-chart");
+  if (!ctx) return;
+
+  if (!timeline || timeline.length === 0) {
+    ctx.parentElement.innerHTML = '<div class="empty-state"><p>暂无情绪数据</p></div>';
+    return;
+  }
+
+  var labels = timeline.map(function(p) { return formatTime(p.time); });
+  var values = timeline.map(function(p) { return emotionToValue(p.label); });
+  var colors = timeline.map(function(p) { return emotionColor(p.label); });
+  var sizes = timeline.map(function(p) { return p.confidence > 0.8 ? 8 : 4; });
+
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "情绪状态",
+        data: values,
+        borderColor: "#0d9488",
+        backgroundColor: "rgba(13,148,136,0.08)",
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointBackgroundColor: colors,
+        pointBorderColor: colors,
+        pointRadius: sizes,
+        pointHoverRadius: 8
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              var idx = ctx.dataIndex;
+              return timeline[idx].label + " (" + (timeline[idx].confidence * 100).toFixed(0) + "%)";
+            }
+          }
+        }
+      },
+      scales: {
+        y: {
+          min: -2.5,
+          max: 2.5,
+          ticks: {
+            stepSize: 1,
+            callback: function(v) {
+              return { 2: "calm", 1: "neutral", 0: "stress", "-1": "sad", "-2": "anxiety" }[v] || "";
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function renderTimeline(turns) {
+  var container = document.getElementById("timeline-container");
+  if (!container) return;
+
+  if (!turns || turns.length === 0) {
+    container.innerHTML = '<div class="empty-state"><p>暂无对话记录</p></div>';
+    return;
+  }
+
+  var html = "";
+  var items = turns.slice(-20);
+  for (var i = 0; i < items.length; i++) {
+    var t = items[i];
+    html +=
+      '<div class="timeline-item">' +
+        '<span class="time">' + formatTime(t.time) + '</span>' +
+        '<span class="role user">用户</span>' +
+        '<span class="text">' + escapeHtml(t.userText) + '</span>' +
+      '</div>' +
+      '<div class="timeline-item">' +
+        '<span class="time"></span>' +
+        '<span class="role assistant">助手</span>' +
+        '<span class="text' + (t.safetyLevel === "high" ? " safety-high" : "") + '">' + escapeHtml(t.assistantText) + '</span>' +
+      '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function renderHeatmap(eegChannels) {
+  var container = document.getElementById("heatmap-container");
+  if (!container) return;
+
+  if (!eegChannels || !eegChannels.channels || eegChannels.channels.length === 0) {
+    container.innerHTML =
+      '<div class="empty-state">' +
+        '<p>暂无 EEG 导入数据</p>' +
+        '<p style="font-size:12px;margin-top:4px">在会话中导入 EEG CSV 文件后可查看频谱热力图</p>' +
+      '</div>';
+    return;
+  }
+
+  var bands = ["delta", "theta", "alpha", "beta", "gamma"];
+  var channels = eegChannels.channels.slice(0, 8);
+
+  var allVals = [];
+  for (var i = 0; i < channels.length; i++) {
+    for (var j = 0; j < bands.length; j++) {
+      allVals.push(channels[i][bands[j]] || 0);
+    }
+  }
+  var maxVal = Math.max.apply(null, allVals.concat([0.01]));
+
+  function heatColor(val) {
+    var ratio = Math.min(val / maxVal, 1);
+    var r = Math.round(13 + (239 - 13) * ratio);
+    var g = Math.round(148 - 148 * ratio);
+    var b = Math.round(136 - 136 * ratio * 0.7);
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  var html =
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">' +
+      '来源: ' + (eegChannels.filename || "未知") + ' (' + (eegChannels.formatType || "unknown") + ' 格式)' +
+    '</div>' +
+    '<div class="heatmap-header"><span></span>';
+
+  for (var b = 0; b < bands.length; b++) {
+    html += '<span>' + bands[b] + '</span>';
+  }
+  html += '</div>';
+
+  for (var ci = 0; ci < channels.length; ci++) {
+    var ch = channels[ci];
+    html += '<div class="heatmap-row"><span class="ch-label">' + ch.channelName + '</span>';
+    for (var bi = 0; bi < bands.length; bi++) {
+      var v = ch[bands[bi]] || 0;
+      html += '<span class="heatmap-cell" style="background:' + heatColor(v) + '">' + v.toFixed(2) + '</span>';
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  var div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
