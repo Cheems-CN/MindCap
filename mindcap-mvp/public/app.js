@@ -877,6 +877,25 @@ async function createExport(kind) {
 let pendingCsvData = null;
 let pendingFilename = null;
 
+async function loadAvailableModels() {
+  try {
+    const data = await api("/api/models");
+    const select = byId("model-select");
+    if (!select || !data.models || data.models.length === 0) return;
+
+    // Update options based on server response
+    select.innerHTML = '<option value="auto">自动</option>';
+    for (const m of data.models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.name;
+      select.appendChild(opt);
+    }
+  } catch (err) {
+    // Model server not available, keep default options
+  }
+}
+
 function setupEEGImport() {
   const dropZone = byId("eeg-drop-zone");
   const fileInput = byId("eeg-file-input");
@@ -914,6 +933,21 @@ function setupEEGImport() {
   byId("import-eeg-btn").addEventListener("click", () => {
     doImport().catch((err) => showImportError(err.message));
   });
+
+  // Model selector
+  const modelSelect = byId("model-select");
+  const modelHint = byId("model-hint");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", () => {
+      const m = modelSelect.value;
+      if (m === "gcn") modelHint.textContent = "需 ≥4 通道的频段数据 CSV";
+      else if (m === "mserm") modelHint.textContent = "需 28 通道原始时间序列 CSV";
+      else modelHint.textContent = "";
+    });
+  }
+
+  // Load available models
+  loadAvailableModels().catch(() => {});
 }
 
 function readFile(file) {
@@ -1013,7 +1047,8 @@ async function doImport() {
       body: JSON.stringify({
         csvData: pendingCsvData,
         filename: pendingFilename,
-        sessionId: state.currentSessionId || null
+        sessionId: state.currentSessionId || null,
+        model: byId("model-select")?.value || "auto"
       })
     });
 

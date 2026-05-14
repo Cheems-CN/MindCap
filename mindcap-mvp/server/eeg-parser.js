@@ -225,28 +225,29 @@ function mapToEmotion(channels) {
 const MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || "http://127.0.0.1:5051";
 
 /**
- * Call Python GCN model for emotion prediction.
- * Returns { label, confidence, source, detail } on success, null on failure.
+ * Call Python inference server for model prediction.
+ * @param {"gcn"|"mserm"} model
+ * @param {Object} data - { channels } for GCN, { raw_signal } for MS-ERM
  */
-async function predictWithModel(channels) {
+async function predictWithModel(model, data) {
   try {
-    const resp = await fetch(`${MODEL_SERVER_URL}/predict`, {
+    const endpoint = model === "mserm" ? "/predict/mserm" : "/predict/gcn";
+    const resp = await fetch(`${MODEL_SERVER_URL}${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channels }),
+      body: JSON.stringify(data),
       signal: AbortSignal.timeout(5000)
     });
     if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data.top_class) {
+    const result = await resp.json();
+    if (result.top_class) {
       return {
-        label: data.top_class.mindcap_label,
-        confidence: data.top_class.mindcap_confidence,
-        source: "gcn-model",
+        label: result.top_class.mindcap_label,
+        confidence: result.top_class.mindcap_confidence,
+        source: result.model,
         detail: {
-          model_class_cn: data.top_class.label_cn,
-          model_probability: data.top_class.probability,
-          all_classes: data.all_classes
+          model_class_cn: result.top_class.label_cn,
+          model_probability: result.top_class.probability,
         }
       };
     }
@@ -257,49 +258,128 @@ async function predictWithModel(channels) {
 }
 
 /**
- * Main parse function: takes CSV text, returns { imp, channels, emotion }.
- * Tries GCN model first, falls back to rule-based if model unavailable.
+ * Parse raw signal CSV: rows = time samples, columns = channels.
+ * Returns 2D array [channel][time_sample].
  */
-async function parseEEGFile(csvText, filename, sessionId) {
-  const parsed = parseCsvContent(csvText);
-  const channels = extractChannels(parsed);
+function parseRawSignalCSV(csvText) {
+  const lines = csvText.trim().split("\n").filter(Boolean);
+  const headers = lines[0].split(/[,\t;]/).map(h => h.trim());
 
-  // Try GCN model first, fall back to rules
-  let emotion = mapToEmotion(channels);
-  let isModel = false;
-  if (channels.length >= 4) {
-    const modelResult = await predictWithModel(channels);
+  const channels = [];
+  for (let c = 0; c < headers.length; c++) {
+    channels.push([]);
+  }
+
+  for (let r = 1; r < lines.length; r++) {
+    const vals = lines[r].split(/[,\t;]/);
+    for (let c = 0; c < headers.length; c++) {
+      channels[c].push(parseFloat(vals[c]) || 0);
+    }
+  }
+
+  return { channels, channelNames: headers, sampleCount: lines.length - 1 };
+}
+
+/**
+ * Fetch available models from inference server.
+ */
+async function getAvailableModels() {
+  try {
+    const resp = await fetch(`${MODEL_SERVER_URL}/models`, { signal: AbortSignal.timeout(3000) });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.models || [];
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Main parse function: takes CSV text, returns { imp, channels, emotion }.
+ * @param {string} model - "gcn" or "mserm" or "auto"
+ */
+async function parseEEGFile(csvText, filename, sessionId, model = "auto") {
+  // Handle raw signal format for MS-ERM
+  if (model === "mserm") {
+    const rawData = parseRawSignalCSV(csvText);
+    const rawSignal = rawData.channels;
+    const channelCount = rawSignal.length;
+
+    const uniqueChannels = new Set(rawData.channelNames);
+    const emotion = mapToEmotion(
+      rawData.channelNames.map((name, i) => ({
+        channelName: name, band: "raw", value: rawSignal[i].reduce((a,b)=>a+b,0)/rawSignal[i].length
+      }))
+    );
+
+    // Try MS-ERM model
+    let isModel = false;
+    const modelResult = await predictWithModel("mserm", { raw_signal: rawSignal });
     if (modelResult) {
       isModel = true;
-      emotion = {
-        label: modelResult.label,
-        confidence: modelResult.confidence,
-        reasons: `GCN模型: ${modelResult.detail.model_class_cn} (${(modelResult.detail.model_probability * 100).toFixed(1)}%)`,
-        alphaBetaRatio: null,
-        avgFrontalBeta: null,
-        modelDetail: modelResult.detail
-      };
+      emotion.label = modelResult.label;
+      emotion.confidence = modelResult.confidence;
+      emotion.reasons = `MS-ERM模型: ${modelResult.detail.model_class_cn} (${(modelResult.detail.model_probability * 100).toFixed(1)}%)`;
+      emotion.modelDetail = modelResult.detail;
+    }
+
+    return {
+      imp: {
+        sessionId: sessionId || null, filename: filename || "unknown.csv",
+        channelCount, sampleCount: rawData.sampleCount, durationSec: null,
+        sampleRate: null, device: null, formatType: "raw_signal",
+        detectedEmotionLabel: emotion.label, detectedEmotionConfidence: emotion.confidence,
+        time: new Date().toISOString(), emotionSource: isModel ? "mserm" : "rules"
+      },
+      channels: rawData.channelNames.map((name, i) => ({
+        channelName: name, band: "raw", value: rawSignal[i].reduce((a,b)=>a+b,0)/rawSignal[i].length
+      })),
+      emotion
+    };
+  }
+
+  // GCN / auto: band format
+  const parsed = parseCsvContent(csvText);
+  const channels = extractChannels(parsed);
+  let emotion = mapToEmotion(channels);
+  let isModel = false;
+
+  // Try GCN model if >=4 channels
+  if (model === "gcn" || model === "auto") {
+    if (channels.length >= 4) {
+      const channelData = [];
+      const bandMap = {};
+      for (const ch of channels) {
+        if (!bandMap[ch.channelName]) { bandMap[ch.channelName] = { channelName: ch.channelName }; }
+        bandMap[ch.channelName][ch.band] = ch.value;
+      }
+      const modelChannels = Object.values(bandMap);
+
+      const modelResult = await predictWithModel("gcn", { channels: modelChannels });
+      if (modelResult) {
+        isModel = true;
+        emotion = {
+          label: modelResult.label, confidence: modelResult.confidence,
+          reasons: `GCN模型: ${modelResult.detail.model_class_cn} (${(modelResult.detail.model_probability * 100).toFixed(1)}%)`,
+          alphaBetaRatio: emotion.alphaBetaRatio, avgFrontalBeta: emotion.avgFrontalBeta,
+          modelDetail: modelResult.detail
+        };
+      }
     }
   }
 
   const uniqueChannels = new Set(channels.map((c) => c.channelName));
 
-  const imp = {
-    sessionId: sessionId || null,
-    filename: filename || "unknown.csv",
-    channelCount: uniqueChannels.size,
-    sampleCount: parsed.format === "raw" ? parsed.rowCount : 0,
-    durationSec: null,
-    sampleRate: null,
-    device: null,
-    formatType: parsed.format,
-    detectedEmotionLabel: emotion.label,
-    detectedEmotionConfidence: emotion.confidence,
-    time: new Date().toISOString(),
-    emotionSource: isModel ? "gcn-model" : "rules"
+  return {
+    imp: {
+      sessionId: sessionId || null, filename: filename || "unknown.csv",
+      channelCount: uniqueChannels.size, sampleCount: parsed.format === "raw" ? parsed.rowCount : 0,
+      durationSec: null, sampleRate: null, device: null, formatType: parsed.format,
+      detectedEmotionLabel: emotion.label, detectedEmotionConfidence: emotion.confidence,
+      time: new Date().toISOString(), emotionSource: isModel ? "gcn" : "rules"
+    },
+    channels, emotion
   };
-
-  return { imp, channels, emotion };
 }
 
-module.exports = { parseEEGFile, predictWithModel, detectFormat, parseCsvContent, extractChannels, mapToEmotion };
+module.exports = { parseEEGFile, predictWithModel, getAvailableModels, detectFormat, parseCsvContent, extractChannels, mapToEmotion };

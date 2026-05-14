@@ -6,9 +6,8 @@ const { BufferWindowMemory, VectorStoreRetrieverMemory, CombinedMemory } = requi
 const { MemoryVectorStore } = require("@langchain/classic/vectorstores/memory");
 const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
-const { parseEEGFile } = require("./eeg-parser");
+const { parseEEGFile, getAvailableModels } = require("./eeg-parser");
 const { createPopulatedVectorStore, persistContext } = require("./memory-store");
-const { recordFeedback, getBestTrack, getTrackMatrix, TRACK_LABELS } = require("./track-learner");
 
 const HOST = "127.0.0.1";
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5050;
@@ -179,23 +178,9 @@ function serveStatic(req, res, pathname) {
   const resolved = path.resolve(PUBLIC_DIR, `.${cleanPath}`);
   if (!resolved.startsWith(PUBLIC_DIR)) { sendJson(res, 403, { error: "Forbidden" }); return; }
   fs.readFile(resolved, (err, content) => {
-    if (!err) {
-      res.writeHead(200, { "Content-Type": getMimeType(resolved) });
-      res.end(content);
-      return;
-    }
-    // If not found and no extension, try .html
-    if (err.code === "ENOENT" && !path.extname(cleanPath)) {
-      const htmlPath = resolved + ".html";
-      if (!htmlPath.startsWith(PUBLIC_DIR)) { sendJson(res, 403, { error: "Forbidden" }); return; }
-      fs.readFile(htmlPath, (err2, content2) => {
-        if (err2) { sendJson(res, 404, { error: "Not found" }); return; }
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(content2);
-      });
-      return;
-    }
-    sendJson(res, 404, { error: "Not found" });
+    if (err) { sendJson(res, 404, { error: "Not found" }); return; }
+    res.writeHead(200, { "Content-Type": getMimeType(resolved) });
+    res.end(content);
   });
 }
 
@@ -264,20 +249,7 @@ const interventionTracks = {
   }
 };
 
-function matchTrackByContext(contextText, preferredInterventions, currentMessage, emotionLabel) {
-  // Try history-based best track first
-  if (emotionLabel) {
-    const best = getBestTrack(emotionLabel, 3);
-    if (best && best.successRate >= 0.5) {
-      return {
-        trackKey: best.trackKey,
-        source: "history",
-        sourceLabel: `基于历史数据：${emotionLabel} 下「${TRACK_LABELS[best.trackKey] || best.trackKey}」最有效（${best.helpfulCount}/${best.totalCount} 次有帮助）`
-      };
-    }
-  }
-
-  // Fallback to keyword matching
+function matchTrackByContext(contextText, preferredInterventions, currentMessage) {
   const combined = String(contextText || "").toLowerCase();
   const current = String(currentMessage || "").toLowerCase();
   const preferred = (preferredInterventions || []).join("、").toLowerCase();
@@ -293,11 +265,7 @@ function matchTrackByContext(contextText, preferredInterventions, currentMessage
     if (preferred && track.keywords.some((kw) => preferred.includes(kw.toLowerCase()))) score += 1;
     if (score > bestScore) { bestScore = score; bestKey = key; }
   }
-  return {
-    trackKey: bestKey,
-    source: "keyword",
-    sourceLabel: "基于关键词匹配"
-  };
+  return bestKey;
 }
 
 function updateInterventionState(session, selectedTrackKey, emotionLabel) {
@@ -333,9 +301,7 @@ function buildMemoryAwareSuggestions({ session, user, emotion, memoryContext, cu
   if (emotion?.label === "anxiety" || emotion?.label === "stress") defaultTrackKey = "breathing";
   if (emotion?.label === "sad") defaultTrackKey = "grounding";
 
-  const matchResult = matchTrackByContext(contextText, user?.longTermProfile?.preferredInterventions, currentMessage, emotion?.label);
-  const selectedTrackKey = matchResult?.trackKey || defaultTrackKey;
-  const trackSource = matchResult?.sourceLabel || "";
+  const selectedTrackKey = matchTrackByContext(contextText, user?.longTermProfile?.preferredInterventions, currentMessage) || defaultTrackKey;
   const interventionState = updateInterventionState(session, selectedTrackKey, emotion?.label);
   const track = interventionTracks[interventionState.trackKey] || interventionTracks.task;
   const step = Math.max(0, Math.min(interventionState.stepIndex, track.steps.length - 1));
@@ -345,18 +311,11 @@ function buildMemoryAwareSuggestions({ session, user, emotion, memoryContext, cu
     (user?.longTermProfile?.preferredInterventions || [])[0] ||
     "先稳定呼吸再做最小动作";
 
-  const suggestions = [
+  return [
     `延续方案【${track.name}】第${step + 1}步：${track.steps[step]}`,
     `记忆锚点：你历史上更有效的方式是「${memoryAnchor}」，本轮优先沿用。`,
     "执行后告诉我：情绪强度从0-10变成了几分，我会按同一方案继续下一步。"
   ];
-
-  // Prepend source label if from history
-  if (trackSource) {
-    suggestions.unshift(`[${trackSource}]`);
-  }
-
-  return suggestions;
 }
 
 // ── Safety detection ────────────────────────────────────────────────
@@ -753,12 +712,6 @@ async function handleApi(req, res, urlObj) {
       type: "feedback",
       detail: `helpful=${fb.helpful}, moodDelta=${fb.moodDelta}`
     });
-
-    // Learn from feedback
-    const emotionLabel = session.currentEmotion?.label;
-    const trackKey = session.interventionState?.trackKey;
-    recordFeedback(emotionLabel, trackKey, fb.helpful, fb.moodDelta);
-
     publishSessionEvent(body.sessionId, "feedback", fb);
     sendJson(res, 200, { ok: true, feedback: fb });
     return true;
@@ -823,7 +776,7 @@ async function handleApi(req, res, urlObj) {
 
   // GET /api/strategy
   if (pathname === "/api/strategy" && req.method === "GET") {
-    sendJson(res, 200, { strategy: db.getStrategyConfig(), trackMatrix: db.getTrackMatrix() });
+    sendJson(res, 200, { strategy: db.getStrategyConfig() });
     return true;
   }
 
@@ -881,6 +834,13 @@ async function handleApi(req, res, urlObj) {
     return true;
   }
 
+  // GET /api/models
+  if (req.method === "GET" && pathname === "/api/models") {
+    const models = await getAvailableModels();
+    sendJson(res, 200, { models });
+    return true;
+  }
+
   // POST /api/eeg/import
   if (req.method === "POST" && pathname === "/api/eeg/import") {
     const body = await parseBody(req).catch((err) => ({ __error: err.message }));
@@ -901,7 +861,8 @@ async function handleApi(req, res, urlObj) {
       return true;
     }
 
-    const parseResult = await parseEEGFile(body.csvData, body.filename, body.sessionId || null);
+    const model = body.model || "auto";
+    const parseResult = await parseEEGFile(body.csvData, body.filename, body.sessionId || null, model);
     const importId = db.createId("eegimp");
     const now = new Date().toISOString();
 
@@ -959,68 +920,6 @@ async function handleApi(req, res, urlObj) {
     const full = db.getEEGImportFull(importId);
     if (!full) { sendJson(res, 404, { error: "Import not found" }); return true; }
     sendJson(res, 200, { import: full });
-    return true;
-  }
-
-  // GET /api/report/:id
-  if (req.method === "GET" && pathname.startsWith("/api/report/")) {
-    const sessionId = pathname.split("/")[3];
-    if (!sessionId) { sendJson(res, 400, { error: "Missing session ID" }); return true; }
-
-    const session = db.getSession(sessionId);
-    if (!session) { sendJson(res, 404, { error: "Session not found" }); return true; }
-
-    const user = db.getUser(session.userId);
-
-    const turns = session.chatTurns.length;
-    const feedbackList = session.feedback || [];
-    const feedbackCount = feedbackList.length;
-    const helpfulCount = feedbackList.filter(f => f.helpful).length;
-    const helpfulRate = feedbackCount > 0 ? helpfulCount / feedbackCount : 0;
-    const moodDeltas = feedbackList.map(f => f.moodDelta).filter(n => !Number.isNaN(n));
-    const avgMoodDelta = moodDeltas.length > 0
-      ? moodDeltas.reduce((a, b) => a + b, 0) / moodDeltas.length : 0;
-
-    const emotionTimeline = (session.emotionTrend || []).map(e => ({
-      time: e.time, label: e.label, confidence: e.confidence
-    }));
-
-    const chatTurns = session.chatTurns.map(t => ({
-      time: t.time,
-      userText: t.userText ? t.userText.substring(0, 120) : "",
-      assistantText: t.assistantText ? t.assistantText.substring(0, 200) : "",
-      safetyLevel: t.safetyLevel || "normal",
-      llmSource: t.llmSource || "unknown",
-      suggestions: (t.suggestions || []).slice(0, 2)
-    }));
-
-    const imports = db.getEEGImports(sessionId);
-    let eegChannels = null;
-    if (imports.length > 0) {
-      const lastImport = imports[0];
-      const channels = db.getEEGImportChannels(lastImport.id);
-      const channelMap = {};
-      for (const ch of channels) {
-        if (!channelMap[ch.channel_name]) {
-          channelMap[ch.channel_name] = { channelName: ch.channel_name };
-        }
-        if (ch.band) channelMap[ch.channel_name][ch.band] = ch.value;
-      }
-      eegChannels = {
-        importId: lastImport.id,
-        filename: lastImport.filename,
-        formatType: lastImport.format_type,
-        channels: Object.values(channelMap)
-      };
-    }
-
-    sendJson(res, 200, {
-      session: { id: session.id, startedAt: session.startedAt, endedAt: session.endedAt, status: session.status, userName: user ? user.name : "未知用户", userId: session.userId },
-      stats: { turns, feedbackCount, helpfulRate: Number(helpfulRate.toFixed(2)), avgMoodDelta: Number(avgMoodDelta.toFixed(2)) },
-      emotionTimeline,
-      chatTurns,
-      eegChannels
-    });
     return true;
   }
 
