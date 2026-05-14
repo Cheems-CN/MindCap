@@ -607,6 +607,51 @@ button:hover {
   cursor: pointer;
 }
 
+/* ── Track Matrix ────────────────────────────────────────────── */
+
+.track-matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.track-matrix-table th {
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 4px;
+  border-bottom: 2px solid var(--line);
+  text-align: center;
+}
+
+.track-matrix-table .em-label {
+  font-weight: 600;
+  color: var(--ink);
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.matrix-cell {
+  text-align: center;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.4;
+}
+
+.matrix-cell small {
+  font-size: 10px;
+}
+
+.matrix-cell.empty {
+  color: #c0c8d4;
+}
+
+.track-matrix-container p.note {
+  margin-top: 8px;
+}
+
 .hidden {
   display: none !important;
 }

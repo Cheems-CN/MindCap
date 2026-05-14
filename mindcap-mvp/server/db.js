@@ -123,6 +123,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS track_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    emotion_label TEXT NOT NULL,
+    track_key TEXT NOT NULL,
+    helpful_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    avg_mood_delta REAL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(emotion_label, track_key)
+  );
+
   CREATE TABLE IF NOT EXISTS safety_logs (
     id TEXT PRIMARY KEY,
     session_id TEXT,
@@ -735,6 +746,65 @@ function clearMemoryVectors(userId) {
   db.prepare("DELETE FROM memory_vectors WHERE user_id = ?").run(userId);
 }
 
+// ── Track stats ────────────────────────────────────────────────────
+
+function upsertTrackStat(emotionLabel, trackKey, helpful, moodDelta) {
+  const existing = db.prepare(
+    "SELECT id, helpful_count, total_count, avg_mood_delta FROM track_stats WHERE emotion_label = ? AND track_key = ?"
+  ).get(emotionLabel, trackKey);
+
+  if (existing) {
+    const newHelpful = existing.helpful_count + (helpful ? 1 : 0);
+    const newTotal = existing.total_count + 1;
+    const totalDelta = existing.avg_mood_delta * existing.total_count + (moodDelta || 0);
+    const newAvg = newTotal > 0 ? totalDelta / newTotal : 0;
+    db.prepare(
+      "UPDATE track_stats SET helpful_count = ?, total_count = ?, avg_mood_delta = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(newHelpful, newTotal, newAvg, existing.id);
+  } else {
+    db.prepare(
+      "INSERT INTO track_stats (emotion_label, track_key, helpful_count, total_count, avg_mood_delta) VALUES (?, ?, ?, ?, ?)"
+    ).run(emotionLabel, trackKey, helpful ? 1 : 0, 1, moodDelta || 0);
+  }
+}
+
+function getBestTrack(emotionLabel, minSamples = 3) {
+  const row = db.prepare(
+    "SELECT track_key, helpful_count, total_count, avg_mood_delta FROM track_stats WHERE emotion_label = ? AND total_count >= ? ORDER BY CAST(helpful_count AS REAL) / total_count DESC, avg_mood_delta DESC LIMIT 1"
+  ).get(emotionLabel, minSamples);
+  if (!row) return null;
+  return {
+    trackKey: row.track_key,
+    helpfulCount: row.helpful_count,
+    totalCount: row.total_count,
+    successRate: row.total_count > 0 ? row.helpful_count / row.total_count : 0,
+    avgMoodDelta: row.avg_mood_delta
+  };
+}
+
+function getTrackMatrix() {
+  const rows = db.prepare(
+    "SELECT emotion_label, track_key, helpful_count, total_count, avg_mood_delta FROM track_stats ORDER BY emotion_label, track_key"
+  ).all();
+  const emotions = ["anxiety", "stress", "sad", "calm", "neutral"];
+  const tracks = ["breathing", "task", "sleep", "social", "grounding"];
+
+  const matrix = {};
+  for (const em of emotions) {
+    matrix[em] = {};
+    for (const tk of tracks) {
+      const row = rows.find(r => r.emotion_label === em && r.track_key === tk);
+      matrix[em][tk] = row ? {
+        helpfulCount: row.helpful_count,
+        totalCount: row.total_count,
+        rate: row.total_count > 0 ? row.helpful_count / row.total_count : null,
+        avgMoodDelta: row.avg_mood_delta
+      } : null;
+    }
+  }
+  return { emotions, tracks, matrix };
+}
+
 // ── Export ──────────────────────────────────────────────────────────
 
 function insertExport(record) {
@@ -776,5 +846,8 @@ module.exports = {
   getEEGImportFull,
   saveMemoryVector,
   loadMemoryVectors,
-  clearMemoryVectors
+  clearMemoryVectors,
+  upsertTrackStat,
+  getBestTrack,
+  getTrackMatrix
 };

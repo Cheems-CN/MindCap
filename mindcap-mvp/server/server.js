@@ -8,6 +8,7 @@ const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
 const { parseEEGFile } = require("./eeg-parser");
 const { createPopulatedVectorStore, persistContext } = require("./memory-store");
+const { recordFeedback, getBestTrack, getTrackMatrix, TRACK_LABELS } = require("./track-learner");
 
 const HOST = "127.0.0.1";
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5050;
@@ -249,7 +250,20 @@ const interventionTracks = {
   }
 };
 
-function matchTrackByContext(contextText, preferredInterventions, currentMessage) {
+function matchTrackByContext(contextText, preferredInterventions, currentMessage, emotionLabel) {
+  // Try history-based best track first
+  if (emotionLabel) {
+    const best = getBestTrack(emotionLabel, 3);
+    if (best && best.successRate >= 0.5) {
+      return {
+        trackKey: best.trackKey,
+        source: "history",
+        sourceLabel: `基于历史数据：${emotionLabel} 下「${TRACK_LABELS[best.trackKey] || best.trackKey}」最有效（${best.helpfulCount}/${best.totalCount} 次有帮助）`
+      };
+    }
+  }
+
+  // Fallback to keyword matching
   const combined = String(contextText || "").toLowerCase();
   const current = String(currentMessage || "").toLowerCase();
   const preferred = (preferredInterventions || []).join("、").toLowerCase();
@@ -265,7 +279,11 @@ function matchTrackByContext(contextText, preferredInterventions, currentMessage
     if (preferred && track.keywords.some((kw) => preferred.includes(kw.toLowerCase()))) score += 1;
     if (score > bestScore) { bestScore = score; bestKey = key; }
   }
-  return bestKey;
+  return {
+    trackKey: bestKey,
+    source: "keyword",
+    sourceLabel: "基于关键词匹配"
+  };
 }
 
 function updateInterventionState(session, selectedTrackKey, emotionLabel) {
@@ -301,7 +319,9 @@ function buildMemoryAwareSuggestions({ session, user, emotion, memoryContext, cu
   if (emotion?.label === "anxiety" || emotion?.label === "stress") defaultTrackKey = "breathing";
   if (emotion?.label === "sad") defaultTrackKey = "grounding";
 
-  const selectedTrackKey = matchTrackByContext(contextText, user?.longTermProfile?.preferredInterventions, currentMessage) || defaultTrackKey;
+  const matchResult = matchTrackByContext(contextText, user?.longTermProfile?.preferredInterventions, currentMessage, emotion?.label);
+  const selectedTrackKey = matchResult?.trackKey || defaultTrackKey;
+  const trackSource = matchResult?.sourceLabel || "";
   const interventionState = updateInterventionState(session, selectedTrackKey, emotion?.label);
   const track = interventionTracks[interventionState.trackKey] || interventionTracks.task;
   const step = Math.max(0, Math.min(interventionState.stepIndex, track.steps.length - 1));
@@ -311,11 +331,18 @@ function buildMemoryAwareSuggestions({ session, user, emotion, memoryContext, cu
     (user?.longTermProfile?.preferredInterventions || [])[0] ||
     "先稳定呼吸再做最小动作";
 
-  return [
+  const suggestions = [
     `延续方案【${track.name}】第${step + 1}步：${track.steps[step]}`,
     `记忆锚点：你历史上更有效的方式是「${memoryAnchor}」，本轮优先沿用。`,
     "执行后告诉我：情绪强度从0-10变成了几分，我会按同一方案继续下一步。"
   ];
+
+  // Prepend source label if from history
+  if (trackSource) {
+    suggestions.unshift(`[${trackSource}]`);
+  }
+
+  return suggestions;
 }
 
 // ── Safety detection ────────────────────────────────────────────────
@@ -712,6 +739,12 @@ async function handleApi(req, res, urlObj) {
       type: "feedback",
       detail: `helpful=${fb.helpful}, moodDelta=${fb.moodDelta}`
     });
+
+    // Learn from feedback
+    const emotionLabel = session.currentEmotion?.label;
+    const trackKey = session.interventionState?.trackKey;
+    recordFeedback(emotionLabel, trackKey, fb.helpful, fb.moodDelta);
+
     publishSessionEvent(body.sessionId, "feedback", fb);
     sendJson(res, 200, { ok: true, feedback: fb });
     return true;
@@ -776,7 +809,7 @@ async function handleApi(req, res, urlObj) {
 
   // GET /api/strategy
   if (pathname === "/api/strategy" && req.method === "GET") {
-    sendJson(res, 200, { strategy: db.getStrategyConfig() });
+    sendJson(res, 200, { strategy: db.getStrategyConfig(), trackMatrix: db.getTrackMatrix() });
     return true;
   }
 
