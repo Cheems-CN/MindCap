@@ -123,6 +123,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS track_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    emotion_label TEXT NOT NULL,
+    track_key TEXT NOT NULL,
+    helpful_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    avg_mood_delta REAL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(emotion_label, track_key)
+  );
+
   CREATE TABLE IF NOT EXISTS safety_logs (
     id TEXT PRIMARY KEY,
     session_id TEXT,
@@ -635,20 +646,50 @@ function getEvaluation() {
   const helpfulCount = db.prepare("SELECT COUNT(*) AS cnt FROM feedback WHERE helpful = 1").get().cnt;
   const helpfulRate = totalFeedback > 0 ? helpfulCount / totalFeedback : 0;
 
+  // Real intervention stats from track_stats
+  const trackStats = db.prepare(
+    "SELECT emotion_label, track_key, helpful_count, total_count, avg_mood_delta FROM track_stats ORDER BY emotion_label, track_key"
+  ).all();
+
+  // Per-emotion best track
+  const emotions = ["anxiety", "stress", "sad", "calm", "neutral"];
+  const perEmotion = {};
+  for (const em of emotions) {
+    const emRows = trackStats.filter(r => r.emotion_label === em && r.total_count > 0);
+    if (emRows.length > 0) {
+      const best = emRows.reduce((a, b) =>
+        (a.helpful_count / a.total_count) > (b.helpful_count / b.total_count) ? a : b
+      );
+      perEmotion[em] = {
+        bestTrack: best.track_key,
+        rate: Number((best.helpful_count / best.total_count).toFixed(2)),
+        totalSamples: emRows.reduce((s, r) => s + r.total_count, 0)
+      };
+    }
+  }
+
+  // Overall stats
+  const totalTrackSamples = trackStats.reduce((s, r) => s + r.total_count, 0);
+  const overallHelpful = trackStats.reduce((s, r) => s + r.helpful_count, 0);
+  const overallRate = totalTrackSamples > 0 ? Number((overallHelpful / totalTrackSamples).toFixed(2)) : null;
+
   return {
     modelMetrics: {
-      emotionAcc: 0.5718,
-      f1Macro: 0.54,
-      crossDeviceScore: 0.49
+      overallHelpfulRate: overallRate,
+      totalTrackSamples,
+      trackCount: trackStats.filter(r => r.total_count > 0).length,
+      perEmotion
     },
     interventionMetrics: {
       totalTurns,
       totalFeedback,
-      helpfulRate: Number(helpfulRate.toFixed(2))
+      helpfulRate: Number(helpfulRate.toFixed(2)),
+      totalSessions: db.prepare("SELECT COUNT(*) AS cnt FROM sessions").get().cnt,
+      totalEegImports: db.prepare("SELECT COUNT(*) AS cnt FROM eeg_imports").get().cnt
     },
     exportItems: [
-      "论文图表占位导出",
-      "实验日志CSV占位导出",
+      "会话评估报告（通过 /report 页面）",
+      "实验日志CSV导出",
       "软著材料清单模板"
     ]
   };
@@ -735,6 +776,27 @@ function clearMemoryVectors(userId) {
   db.prepare("DELETE FROM memory_vectors WHERE user_id = ?").run(userId);
 }
 
+// ── Track stats ────────────────────────────────────────────────────
+
+function upsertTrackStat(emotionLabel, trackKey, helpful, moodDelta) {
+  const existing = db.prepare(
+    "SELECT id, helpful_count, total_count, avg_mood_delta FROM track_stats WHERE emotion_label = ? AND track_key = ?"
+  ).get(emotionLabel, trackKey);
+  if (existing) {
+    const newHelpful = existing.helpful_count + (helpful ? 1 : 0);
+    const newTotal = existing.total_count + 1;
+    const totalDelta = existing.avg_mood_delta * existing.total_count + (moodDelta || 0);
+    const newAvg = newTotal > 0 ? totalDelta / newTotal : 0;
+    db.prepare(
+      "UPDATE track_stats SET helpful_count = ?, total_count = ?, avg_mood_delta = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(newHelpful, newTotal, newAvg, existing.id);
+  } else {
+    db.prepare(
+      "INSERT INTO track_stats (emotion_label, track_key, helpful_count, total_count, avg_mood_delta) VALUES (?, ?, ?, ?, ?)"
+    ).run(emotionLabel, trackKey, helpful ? 1 : 0, 1, moodDelta || 0);
+  }
+}
+
 // ── Export ──────────────────────────────────────────────────────────
 
 function insertExport(record) {
@@ -769,6 +831,7 @@ module.exports = {
   getDashboard,
   getEvaluation,
   insertExport,
+  upsertTrackStat,
   createEEGImport,
   insertEEGChannel,
   getEEGImports,
