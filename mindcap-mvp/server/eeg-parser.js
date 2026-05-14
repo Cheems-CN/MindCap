@@ -222,13 +222,65 @@ function mapToEmotion(channels) {
   };
 }
 
+const MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || "http://127.0.0.1:5051";
+
+/**
+ * Call Python GCN model for emotion prediction.
+ * Returns { label, confidence, source, detail } on success, null on failure.
+ */
+async function predictWithModel(channels) {
+  try {
+    const resp = await fetch(`${MODEL_SERVER_URL}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channels }),
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.top_class) {
+      return {
+        label: data.top_class.mindcap_label,
+        confidence: data.top_class.mindcap_confidence,
+        source: "gcn-model",
+        detail: {
+          model_class_cn: data.top_class.label_cn,
+          model_probability: data.top_class.probability,
+          all_classes: data.all_classes
+        }
+      };
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
 /**
  * Main parse function: takes CSV text, returns { imp, channels, emotion }.
+ * Tries GCN model first, falls back to rule-based if model unavailable.
  */
-function parseEEGFile(csvText, filename, sessionId) {
+async function parseEEGFile(csvText, filename, sessionId) {
   const parsed = parseCsvContent(csvText);
   const channels = extractChannels(parsed);
-  const emotion = mapToEmotion(channels);
+
+  // Try GCN model first, fall back to rules
+  let emotion = mapToEmotion(channels);
+  let isModel = false;
+  if (channels.length >= 4) {
+    const modelResult = await predictWithModel(channels);
+    if (modelResult) {
+      isModel = true;
+      emotion = {
+        label: modelResult.label,
+        confidence: modelResult.confidence,
+        reasons: `GCN模型: ${modelResult.detail.model_class_cn} (${(modelResult.detail.model_probability * 100).toFixed(1)}%)`,
+        alphaBetaRatio: null,
+        avgFrontalBeta: null,
+        modelDetail: modelResult.detail
+      };
+    }
+  }
 
   const uniqueChannels = new Set(channels.map((c) => c.channelName));
 
@@ -244,9 +296,10 @@ function parseEEGFile(csvText, filename, sessionId) {
     detectedEmotionLabel: emotion.label,
     detectedEmotionConfidence: emotion.confidence,
     time: new Date().toISOString(),
+    emotionSource: isModel ? "gcn-model" : "rules"
   };
 
   return { imp, channels, emotion };
 }
 
-module.exports = { parseEEGFile, detectFormat, parseCsvContent, extractChannels, mapToEmotion };
+module.exports = { parseEEGFile, predictWithModel, detectFormat, parseCsvContent, extractChannels, mapToEmotion };
