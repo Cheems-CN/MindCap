@@ -887,7 +887,7 @@ async function handleApi(req, res, urlObj) {
       return true;
     }
 
-    const parseResult = parseEEGFile(body.csvData, body.filename, body.sessionId || null);
+    const parseResult = await parseEEGFile(body.csvData, body.filename, body.sessionId || null);
     const importId = db.createId("eegimp");
     const now = new Date().toISOString();
 
