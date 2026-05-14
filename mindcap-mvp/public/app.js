@@ -631,6 +631,52 @@ async function loadStrategy() {
   renderChipList("strategy-training", trainingChips, "暂无训练设置");
 
   renderKeyValueCards("strategy-abtest", strategy.abTestPlaceholder || {}, "暂无A/B配置");
+
+  renderTrackMatrix(data.trackMatrix);
+}
+
+function renderTrackMatrix(trackMatrix) {
+  const container = byId("track-matrix-container");
+  if (!container) return;
+
+  if (!trackMatrix || !trackMatrix.emotions || trackMatrix.emotions.length === 0) {
+    container.innerHTML = '<p class="note">暂无反馈数据（需在会话中提交反馈后积累）</p>';
+    return;
+  }
+
+  const { emotions, tracks, matrix } = trackMatrix;
+  const hasAny = tracks.some(tk => emotions.some(em => matrix[em] && matrix[em][tk]));
+
+  if (!hasAny) {
+    container.innerHTML = '<p class="note">暂无反馈数据（需在会话中提交反馈后积累）</p>';
+    return;
+  }
+
+  const emLabels = { anxiety: "焦虑", stress: "压力", sad: "悲伤", calm: "平静", neutral: "中性" };
+  const tkLabels = { breathing: "呼吸稳定", task: "任务减压", sleep: "睡眠修复", social: "社交安定", grounding: "情绪落地" };
+
+  let html = '<table class="track-matrix-table"><thead><tr><th></th>';
+  for (const tk of tracks) {
+    html += `<th>${tkLabels[tk] || tk}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+
+  for (const em of emotions) {
+    html += `<tr><td class="em-label">${emLabels[em] || em}</td>`;
+    for (const tk of tracks) {
+      const cell = matrix[em] && matrix[em][tk];
+      if (cell && cell.totalCount > 0) {
+        const pct = (cell.rate * 100).toFixed(0);
+        const color = cell.rate >= 0.7 ? "#15803d" : cell.rate >= 0.4 ? "#f59e0b" : "#dc2626";
+        html += `<td class="matrix-cell" style="background:${color}15; color:${color}"><strong>${pct}%</strong><br><small>${cell.helpfulCount}/${cell.totalCount}</small></td>`;
+      } else {
+        html += '<td class="matrix-cell empty">-</td>';
+      }
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
 }
 
 async function saveStrategy() {
