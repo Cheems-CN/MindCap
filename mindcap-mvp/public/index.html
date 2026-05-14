@@ -128,6 +128,15 @@
           <div class="panel-grid two-col" style="margin-top: 14px;">
             <article class="panel" id="eeg-import-panel">
               <h3>EEG 文件导入</h3>
+              <div class="row" style="margin-bottom:8px">
+                <label for="model-select" style="font-size:13px">推理模型:</label>
+                <select id="model-select" style="font-size:13px;padding:4px 8px">
+                  <option value="auto">自动</option>
+                  <option value="gcn">GCN (频段数据)</option>
+                  <option value="mserm">MS-ERM (原始信号)</option>
+                </select>
+                <span id="model-hint" style="font-size:11px;color:var(--muted)"></span>
+              </div>
               <div id="eeg-drop-zone" class="eeg-drop-zone">
                 <div class="drop-zone-content">
                   <span class="drop-icon">📁</span>

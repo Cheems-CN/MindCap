@@ -6,7 +6,7 @@ const { BufferWindowMemory, VectorStoreRetrieverMemory, CombinedMemory } = requi
 const { MemoryVectorStore } = require("@langchain/classic/vectorstores/memory");
 const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
-const { parseEEGFile } = require("./eeg-parser");
+const { parseEEGFile, getAvailableModels } = require("./eeg-parser");
 const { createPopulatedVectorStore, persistContext } = require("./memory-store");
 
 const HOST = "127.0.0.1";
@@ -834,6 +834,13 @@ async function handleApi(req, res, urlObj) {
     return true;
   }
 
+  // GET /api/models
+  if (req.method === "GET" && pathname === "/api/models") {
+    const models = await getAvailableModels();
+    sendJson(res, 200, { models });
+    return true;
+  }
+
   // POST /api/eeg/import
   if (req.method === "POST" && pathname === "/api/eeg/import") {
     const body = await parseBody(req).catch((err) => ({ __error: err.message }));
@@ -854,7 +861,8 @@ async function handleApi(req, res, urlObj) {
       return true;
     }
 
-    const parseResult = parseEEGFile(body.csvData, body.filename, body.sessionId || null);
+    const model = body.model || "auto";
+    const parseResult = await parseEEGFile(body.csvData, body.filename, body.sessionId || null, model);
     const importId = db.createId("eegimp");
     const now = new Date().toISOString();
 
