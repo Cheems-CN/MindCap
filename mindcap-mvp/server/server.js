@@ -8,6 +8,8 @@ const { Embeddings } = require("@langchain/core/embeddings");
 const db = require("./db");
 const { parseEEGFile, getAvailableModels } = require("./eeg-parser");
 const { createPopulatedVectorStore, persistContext } = require("./memory-store");
+const { recordFeedback, getBestTrack, getTrackMatrix, TRACK_LABELS } = require("./track-learner");
+const wsServer = require("./ws-server");
 
 const HOST = "127.0.0.1";
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5050;
@@ -683,6 +685,7 @@ async function handleApi(req, res, urlObj) {
     }
 
     publishSessionEvent(body.sessionId, "eeg", event);
+    wsServer.broadcastEmotion(event.label, event.confidence);
     sendJson(res, 200, { ok: true, currentEmotion: { label: event.label, confidence: event.confidence, time: event.time } });
     return true;
   }
@@ -740,6 +743,8 @@ async function handleApi(req, res, urlObj) {
     const refreshedSession = db.getSession(body.sessionId);
 
     publishSessionEvent(body.sessionId, "chat", turn);
+    // Notify hardware device of chat reply + emotion
+    wsServer.sendChatReply(reply.text, session.currentEmotion?.label);
     sendJson(res, 200, {
       turnId,
       assistantMessage: reply.text,
@@ -903,6 +908,12 @@ async function handleApi(req, res, urlObj) {
     return true;
   }
 
+  // GET /api/hardware/state
+  if (req.method === "GET" && pathname === "/api/hardware/state") {
+    sendJson(res, 200, wsServer.getState());
+    return true;
+  }
+
   // POST /api/eeg/import
   if (req.method === "POST" && pathname === "/api/eeg/import") {
     const body = await parseBody(req).catch((err) => ({ __error: err.message }));
@@ -939,15 +950,16 @@ async function handleApi(req, res, urlObj) {
       channelRecords.push({ id: chId, channelName: ch.channelName, band: ch.band, value: ch.value });
     }
 
+    // Always broadcast emotion to hardware
+    wsServer.broadcastEmotion(parseResult.emotion.label, parseResult.emotion.confidence);
+
     // If session is active, also push as an EEG event
     if (session && session.status === "active") {
       const eegEventId = db.createId("eeg");
       db.insertEEGEvent(eegEventId, body.sessionId, parseResult.emotion.label, parseResult.emotion.confidence, now);
       db.updateSessionEmotion(body.sessionId, parseResult.emotion.label, parseResult.emotion.confidence, now);
       db.appendSessionTimeline(body.sessionId, {
-        id: db.createId("evt"),
-        time: now,
-        type: "eeg_import",
+        id: db.createId("evt"), time: now, type: "eeg_import",
         detail: `导入 ${body.filename} (${parseResult.imp.channelCount}通道, 判定: ${parseResult.emotion.label})`
       });
       publishSessionEvent(body.sessionId, "eeg", {
@@ -1006,4 +1018,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`MindCap MVP server running at http://${HOST}:${PORT}`);
   console.log(`Database: ${path.join(__dirname, "..", "data", "mindcap.db")}`);
+  wsServer.start();
+  console.log(`WebSocket server running on ws://${HOST}:5052`);
 });
